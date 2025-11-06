@@ -56,71 +56,63 @@ defmodule LLMModels.Sources.Local do
   # Private helpers
 
   defp scan_directory(dir, file_reader, dir_reader) do
-    try do
-      provider_dirs = dir_reader.(dir)
+    provider_dirs = dir_reader.(dir)
 
-      data =
-        Enum.reduce(provider_dirs, %{}, fn subdir, acc ->
-          subdir_path = Path.join(dir, subdir)
+    data =
+      Enum.reduce(provider_dirs, %{}, fn subdir, acc ->
+        subdir_path = Path.join(dir, subdir)
 
-          if File.dir?(subdir_path) do
-            scan_provider_directory(subdir_path, subdir, acc, file_reader, dir_reader)
-          else
-            acc
-          end
-        end)
+        if File.dir?(subdir_path) do
+          scan_provider_directory(subdir_path, subdir, acc, file_reader, dir_reader)
+        else
+          acc
+        end
+      end)
 
-      {:ok, data}
-    rescue
-      e ->
-        Logger.error("Failed to scan local directory #{dir}: #{inspect(e)}")
-        {:error, {:scan_failed, e}}
-    end
+    {:ok, data}
+  rescue
+    e ->
+      Logger.error("Failed to scan local directory #{dir}: #{inspect(e)}")
+      {:error, {:scan_failed, e}}
   end
 
   defp scan_provider_directory(provider_dir, provider_id, acc, file_reader, dir_reader) do
-    try do
-      files = dir_reader.(provider_dir)
+    files = dir_reader.(provider_dir)
 
-      provider_data = %{id: provider_id, models: []}
+    provider_data = %{id: provider_id, models: []}
 
-      result =
-        Enum.reduce(files, provider_data, fn file, provider_acc ->
-          if String.ends_with?(file, ".toml") do
-            file_path = Path.join(provider_dir, file)
-            load_toml_file(file_path, provider_id, file, provider_acc, file_reader)
-          else
-            provider_acc
-          end
-        end)
+    result =
+      Enum.reduce(files, provider_data, fn file, provider_acc ->
+        if String.ends_with?(file, ".toml") do
+          file_path = Path.join(provider_dir, file)
+          load_toml_file(file_path, provider_id, file, provider_acc, file_reader)
+        else
+          provider_acc
+        end
+      end)
 
-      Map.put(acc, to_string(provider_id), result)
-    rescue
-      e ->
-        Logger.warning("Failed to scan provider directory #{provider_dir}: #{inspect(e)}")
-        acc
-    end
+    Map.put(acc, to_string(provider_id), result)
+  rescue
+    e ->
+      Logger.warning("Failed to scan provider directory #{provider_dir}: #{inspect(e)}")
+      acc
   end
 
   defp load_toml_file(file_path, provider_id, filename, provider_data, file_reader) do
-    try do
-      content = file_reader.(file_path)
-      decoded = Toml.decode!(content)
+    content = file_reader.(file_path)
+    decoded = Toml.decode!(content)
 
-      cond do
-        # Provider definition file (matches provider directory name)
-        filename == "#{provider_id}.toml" ->
-          Map.merge(provider_data, decoded)
-
-        # Model definition file
-        true ->
-          model = Map.put_new(decoded, "provider", provider_id)
-          %{provider_data | models: [model | provider_data.models]}
-      end
-    rescue
-      e ->
-        Logger.warning("Failed to parse TOML file #{file_path}: #{inspect(e)}")
-        provider_data
+    # Provider definition file (matches provider directory name)
+    if filename == "#{provider_id}.toml" do
+      Map.merge(provider_data, decoded)
+    else
+      # Model definition file
+      model = Map.put_new(decoded, "provider", provider_id)
+      %{provider_data | models: [model | provider_data.models]}
     end
+  rescue
+    e ->
+      Logger.warning("Failed to parse TOML file #{file_path}: #{inspect(e)}")
+      provider_data
   end
 end

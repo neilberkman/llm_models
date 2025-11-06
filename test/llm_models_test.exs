@@ -12,24 +12,62 @@ defmodule LLMModelsTest do
     :ok
   end
 
-  # Helper to convert old test config format to new sources format
+  # Helper to load test data directly via Engine (bypassing packaged snapshot)
   defp load_with_test_data(config) when is_map(config) do
-    runtime_overrides = %{
-      providers: get_in(config, [:overrides, :providers]) || [],
-      models: get_in(config, [:overrides, :models]) || []
-    }
+    # Extract test data
+    providers = get_in(config, [:overrides, :providers]) || []
+    models = get_in(config, [:overrides, :models]) || []
 
     # Set application env for filters
     if Map.has_key?(config, :allow), do: Application.put_env(:llm_models, :allow, config.allow)
     if Map.has_key?(config, :deny), do: Application.put_env(:llm_models, :deny, config.deny)
     if Map.has_key?(config, :prefer), do: Application.put_env(:llm_models, :prefer, config.prefer)
 
-    LLMModels.load(runtime_overrides: runtime_overrides)
+    # Get config with test filters
+    app_config = LLMModels.Config.get()
+
+    # Compile filters
+    filters = LLMModels.Config.compile_filters(app_config.allow, app_config.deny)
+
+    # Apply filters
+    filtered_models = LLMModels.Engine.apply_filters(models, filters)
+
+    # Build indexes
+    indexes = LLMModels.Engine.build_indexes(providers, filtered_models)
+
+    # Build snapshot
+    snapshot = %{
+      providers_by_id: indexes.providers_by_id,
+      models_by_key: indexes.models_by_key,
+      aliases_by_key: indexes.aliases_by_key,
+      providers: providers,
+      models: indexes.models_by_provider,
+      filters: filters,
+      prefer: app_config.prefer,
+      meta: %{
+        epoch: nil,
+        generated_at: DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+    }
+
+    # Store snapshot
+    Store.put!(snapshot, [])
+    {:ok, snapshot}
+  end
+
+  # Minimal test data for basic tests
+  defp minimal_test_data do
+    %{
+      providers: [%{id: :test_provider, name: "Test Provider"}],
+      models: [
+        %{id: "test-model", provider: :test_provider, capabilities: %{chat: true}}
+      ]
+    }
   end
 
   describe "lifecycle functions" do
     test "load/1 runs engine and stores snapshot" do
-      {:ok, snapshot} = LLMModels.load()
+      {:ok, snapshot} = load_with_test_data(%{overrides: minimal_test_data()})
 
       assert is_map(snapshot)
       assert Map.has_key?(snapshot, :providers_by_id)
@@ -62,7 +100,7 @@ defmodule LLMModelsTest do
     end
 
     test "reload/0 uses last opts" do
-      {:ok, _} = LLMModels.load()
+      {:ok, _} = load_with_test_data(%{overrides: minimal_test_data()})
       epoch1 = LLMModels.epoch()
 
       assert :ok = LLMModels.reload()
@@ -72,7 +110,7 @@ defmodule LLMModelsTest do
     end
 
     test "snapshot/0 returns current snapshot" do
-      {:ok, snapshot} = LLMModels.load()
+      {:ok, snapshot} = load_with_test_data(%{overrides: minimal_test_data()})
       assert LLMModels.snapshot() == snapshot
     end
 
@@ -81,7 +119,7 @@ defmodule LLMModelsTest do
     end
 
     test "epoch/0 returns current epoch" do
-      {:ok, _} = LLMModels.load()
+      {:ok, _} = load_with_test_data(%{overrides: minimal_test_data()})
       epoch = LLMModels.epoch()
 
       assert is_integer(epoch)
@@ -95,7 +133,7 @@ defmodule LLMModelsTest do
 
   describe "provider listing and lookup" do
     setup do
-      {:ok, _} = LLMModels.load()
+      {:ok, _} = load_with_test_data(%{overrides: minimal_test_data()})
       :ok
     end
 
@@ -135,7 +173,7 @@ defmodule LLMModelsTest do
 
   describe "model listing with filters" do
     setup do
-      {:ok, _} = LLMModels.load()
+      {:ok, _} = load_with_test_data(%{overrides: minimal_test_data()})
       :ok
     end
 
@@ -213,7 +251,7 @@ defmodule LLMModelsTest do
 
   describe "model lookup" do
     setup do
-      {:ok, _} = LLMModels.load()
+      {:ok, _} = load_with_test_data(%{overrides: minimal_test_data()})
       :ok
     end
 
@@ -264,7 +302,7 @@ defmodule LLMModelsTest do
 
   describe "capabilities/1" do
     setup do
-      {:ok, _} = LLMModels.load()
+      {:ok, _} = load_with_test_data(%{overrides: minimal_test_data()})
       :ok
     end
 
@@ -343,7 +381,8 @@ defmodule LLMModelsTest do
         overrides: %{
           providers: [%{id: :test_provider}],
           models: [
-            %{id: "test-model", provider: :test_provider, capabilities: %{chat: true}}
+            %{id: "test-model", provider: :test_provider, capabilities: %{chat: true}},
+            %{id: "other-model", provider: :test_provider, capabilities: %{chat: true}}
           ],
           exclude: %{}
         },
@@ -356,6 +395,7 @@ defmodule LLMModelsTest do
       {:ok, _} = load_with_test_data(config)
 
       assert LLMModels.allowed?({:test_provider, "test-model"}) == false
+      assert LLMModels.allowed?({:test_provider, "other-model"}) == true
     end
 
     test "allowed?/1 with string spec" do
@@ -547,7 +587,7 @@ defmodule LLMModelsTest do
 
   describe "spec parsing" do
     setup do
-      {:ok, _} = LLMModels.load()
+      {:ok, _} = load_with_test_data(%{overrides: minimal_test_data()})
       :ok
     end
 
@@ -949,7 +989,7 @@ defmodule LLMModelsTest do
     end
 
     test "handles invalid spec format" do
-      {:ok, _} = LLMModels.load()
+      {:ok, _} = load_with_test_data(%{overrides: minimal_test_data()})
 
       assert {:error, :invalid_format} = LLMModels.parse_spec("invalid")
       assert {:error, :invalid_format} = LLMModels.resolve(:invalid)

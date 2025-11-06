@@ -2,8 +2,8 @@ defmodule LLMModels.Config do
   @moduledoc """
   Configuration reading and normalization for LLMModels.
 
-  Reads from Application environment and provides normalized config maps,
-  compiled filter patterns, and module-based overrides.
+  Reads from Application environment and provides normalized config maps
+  and compiled filter patterns.
   """
 
   require Logger
@@ -11,17 +11,23 @@ defmodule LLMModels.Config do
   @doc """
   Returns the list of sources to load, in precedence order.
 
+  These sources provide raw data that will be merged ON TOP of the packaged
+  base snapshot. The packaged snapshot is always loaded first and is not
+  included in this sources list.
+
   ## Configuration
 
       config :llm_models,
         sources: [
-          {LLMModels.Sources.Packaged, %{}},
-          {LLMModels.Sources.Remote, %{paths: ["priv/llm_models/upstream/models-dev.json"]}},
+          {LLMModels.Sources.ModelsDev, %{}},
           {LLMModels.Sources.Local, %{dir: "priv/llm_models"}},
           {LLMModels.Sources.Config, %{overrides: %{...}}}
         ]
 
-  If not configured, returns default sources (Packaged only).
+  ## Default Behavior
+
+  If not configured, returns an empty list `[]`, meaning only the packaged
+  snapshot will be used (stable, version-pinned behavior).
 
   ## Returns
 
@@ -33,8 +39,8 @@ defmodule LLMModels.Config do
 
     case Keyword.get(config, :sources) do
       nil ->
-        # Default: just packaged snapshot
-        [{LLMModels.Sources.Packaged, %{}}]
+        # Default: Empty list - only use packaged snapshot (stable mode)
+        []
 
       sources when is_list(sources) ->
         sources
@@ -50,8 +56,6 @@ defmodule LLMModels.Config do
 
   A map with keys:
   - `:compile_embed` - Whether to compile-time embed snapshot (default: false)
-  - `:overrides` - Map with `:providers`, `:models`, `:exclude` keys
-  - `:overrides_module` - Module implementing LLMModels.Overrides behaviour (optional)
   - `:allow` - Allow patterns (`:all` or `%{provider => [patterns]}`)
   - `:deny` - Deny patterns (`%{provider => [patterns]}`)
   - `:prefer` - List of preferred provider atoms
@@ -62,8 +66,6 @@ defmodule LLMModels.Config do
 
     %{
       compile_embed: Keyword.get(config, :compile_embed, false),
-      overrides: normalize_overrides(Keyword.get(config, :overrides, %{})),
-      overrides_module: Keyword.get(config, :overrides_module),
       allow: Keyword.get(config, :allow, :all),
       deny: Keyword.get(config, :deny, %{}),
       prefer: Keyword.get(config, :prefer, [])
@@ -99,60 +101,7 @@ defmodule LLMModels.Config do
     }
   end
 
-  @doc """
-  Retrieves overrides from a module implementing LLMModels.Overrides behaviour.
-
-  ## Parameters
-
-  - `module_name` - Module atom or `nil`
-
-  ## Returns
-
-  `%{providers: [], models: [], excludes: %{}}`
-
-  Returns empty values if module is `nil` or not found.
-  """
-  @spec get_overrides_from_module(module() | nil) :: %{
-          providers: [map()],
-          models: [map()],
-          excludes: map()
-        }
-  def get_overrides_from_module(nil), do: %{providers: [], models: [], excludes: %{}}
-
-  def get_overrides_from_module(module_name) when is_atom(module_name) do
-    if Code.ensure_loaded?(module_name) do
-      %{
-        providers: module_name.providers(),
-        models: module_name.models(),
-        excludes: module_name.excludes()
-      }
-    else
-      %{providers: [], models: [], excludes: %{}}
-    end
-  rescue
-    _error ->
-      %{providers: [], models: [], excludes: %{}}
-  end
-
   # Private helpers
-
-  defp normalize_overrides(overrides) when is_map(overrides) do
-    %{
-      providers: Map.get(overrides, :providers, []),
-      models: Map.get(overrides, :models, []),
-      exclude: Map.get(overrides, :exclude, %{})
-    }
-  end
-
-  defp normalize_overrides(overrides) when is_list(overrides) do
-    %{
-      providers: Keyword.get(overrides, :providers, []),
-      models: Keyword.get(overrides, :models, []),
-      exclude: Keyword.get(overrides, :exclude, %{})
-    }
-  end
-
-  defp normalize_overrides(_), do: %{providers: [], models: [], exclude: %{}}
 
   defp compile_patterns(:all), do: :all
 

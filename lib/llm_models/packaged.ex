@@ -1,8 +1,19 @@
 defmodule LLMModels.Packaged do
   @moduledoc """
-  Reads packaged snapshot from priv directory at compile-time or runtime.
+  Provides access to the packaged base snapshot.
 
-  Behavior controlled by `:compile_embed` configuration option.
+  This is NOT a Source - it returns the pre-processed, version-stable snapshot
+  that ships with each release. The snapshot has already been through the full
+  ETL pipeline (normalize → validate → merge → enrich → filter → index).
+
+  Sources (ModelsDev, Local, Config) provide raw data that gets merged ON TOP
+  of this base snapshot.
+
+  ## Loading Strategy
+
+  Behavior controlled by `:compile_embed` configuration option:
+  - `true` - Snapshot embedded at compile-time (zero runtime IO)
+  - `false` - Snapshot loaded at runtime from priv directory
   """
 
   @snapshot_filename "priv/llm_models/snapshot.json"
@@ -29,27 +40,33 @@ defmodule LLMModels.Packaged do
     @snapshot Jason.decode!(snapshot_content, keys: :atoms)
 
     @doc """
-    Returns the packaged snapshot (compile-time embedded).
+    Returns the packaged base snapshot (compile-time embedded).
+
+    This snapshot is the pre-processed output of the ETL pipeline and serves
+    as the stable foundation for this package version.
 
     ## Returns
 
-    Map with `:providers` and `:models` keys, or `nil` if file doesn't exist.
+    Fully indexed snapshot map with providers, models, and indexes, or `nil` if not available.
     """
     @spec snapshot() :: map() | nil
     def snapshot, do: @snapshot
   else
     @doc """
-    Returns the packaged snapshot (runtime loaded).
+    Returns the packaged base snapshot (runtime loaded).
+
+    This snapshot is the pre-processed output of the ETL pipeline and serves
+    as the stable foundation for this package version.
 
     ## Returns
 
-    Map with `:providers` and `:models` keys, or `nil` if file doesn't exist.
+    Fully indexed snapshot map with providers, models, and indexes, or `nil` if not available.
     """
     @spec snapshot() :: map() | nil
     def snapshot do
       case File.read(path()) do
-        # Safe: Snapshot file is controlled by mix llm_models.activate
-        # All keys are validated during activation before being written
+        # Safe: Snapshot file is controlled by mix llm_models.pull
+        # All keys are validated during generation before being written
         {:ok, content} -> Jason.decode!(content, keys: :atoms)
         {:error, _} -> nil
       end

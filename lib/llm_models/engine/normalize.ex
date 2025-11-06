@@ -221,16 +221,14 @@ defmodule LLMModels.Normalize do
 
   defp normalize_modality_atom(value) when is_binary(value) do
     # Try to convert to existing atom first (safe)
-    try do
-      atom = String.to_existing_atom(value)
+    atom = String.to_existing_atom(value)
+    if MapSet.member?(@valid_modalities, atom), do: atom, else: value
+  rescue
+    ArgumentError ->
+      # Atom doesn't exist yet - check if it's a known modality
+      # This is safe because we only create atoms from a small, known set
+      atom = String.to_atom(value)
       if MapSet.member?(@valid_modalities, atom), do: atom, else: value
-    rescue
-      ArgumentError ->
-        # Atom doesn't exist yet - check if it's a known modality
-        # This is safe because we only create atoms from a small, known set
-        atom = String.to_atom(value)
-        if MapSet.member?(@valid_modalities, atom), do: atom, else: value
-    end
   end
 
   defp normalize_modality_atom(value) when is_atom(value) do

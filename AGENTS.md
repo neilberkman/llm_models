@@ -8,8 +8,9 @@
 - **Test with coverage**: `mix test --cover`
 - **Format code**: `mix format`
 - **Compile**: `mix compile`
-- **Update model data**: `mix llm_models.pull` (fetches from models.dev)
+- **Update model data**: `mix llm_models.pull` (fetches from configured remote sources and regenerates snapshot)
 - **Dependencies**: `mix deps.get`
+- **Release**: `mix llm_models.version && mix git_ops.release && git push && git push --tags` (bumps to date-based version, updates CHANGELOG, tags, and pushes)
 
 ## Architecture
 

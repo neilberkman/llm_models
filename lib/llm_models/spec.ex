@@ -4,10 +4,25 @@ defmodule LLMModels.Spec do
 
   This module provides functions to parse and resolve model specifications in various formats,
   including "provider:model" strings, tuples, and bare model IDs with provider scope.
+
+  ## Amazon Bedrock Inference Profiles
+
+  For Amazon Bedrock models, inference profile IDs with region prefixes (us., eu., ap., ca., global.)
+  are supported. The region prefix is stripped for catalog lookup but preserved in the returned
+  model ID. For example:
+
+      iex> LLMModels.Spec.resolve("bedrock:us.anthropic.claude-opus-4-1-20250805-v1:0")
+      {:ok, {:bedrock, "us.anthropic.claude-opus-4-1-20250805-v1:0", %LLMModels.Schema.Model{}}}
+
+  The lookup uses "anthropic.claude-opus-4-1-20250805-v1:0" to find metadata, but the returned
+  model ID retains the "us." prefix for API routing purposes.
   """
 
   alias LLMModels.{Normalize, Store}
   alias LLMModels.Schema.Model
+
+  # Valid Bedrock inference profile region prefixes
+  @bedrock_prefixes ~w(us. eu. ap. ca. global.)
 
   @doc """
   Parses and validates a provider identifier.
@@ -169,20 +184,47 @@ defmodule LLMModels.Spec do
     end
   end
 
+  # For Bedrock inference profiles, splits model_id into {base_id, prefix} where
+  # base_id is used for catalog lookup and prefix is preserved for the returned ID.
+  # For other providers or non-prefixed Bedrock IDs, returns {model_id, nil}.
+  defp lookup_id_and_prefix(provider, model_id) do
+    if provider == :bedrock do
+      case Enum.find_value(@bedrock_prefixes, fn prefix ->
+             if String.starts_with?(model_id, prefix),
+               do: {prefix, String.replace_prefix(model_id, prefix, "")}
+           end) do
+        nil -> {model_id, nil}
+        {prefix, base_id} -> {base_id, prefix}
+      end
+    else
+      {model_id, nil}
+    end
+  end
+
   defp resolve_model(provider, model_id) do
     case Store.snapshot() do
       nil ->
         {:error, :not_found}
 
       snapshot ->
-        key = {provider, model_id}
+        {lookup_id, prefix} = lookup_id_and_prefix(provider, model_id)
 
-        canonical_id = Map.get(snapshot.aliases_by_key, key, model_id)
-        canonical_key = {provider, canonical_id}
+        key = {provider, lookup_id}
+        canonical_base_id = Map.get(snapshot.aliases_by_key, key, lookup_id)
+        canonical_key = {provider, canonical_base_id}
 
         case Map.get(snapshot.models_by_key, canonical_key) do
-          nil -> {:error, :not_found}
-          model -> {:ok, {provider, canonical_id, model}}
+          nil ->
+            {:error, :not_found}
+
+          model ->
+            returned_id =
+              case prefix do
+                nil -> canonical_base_id
+                p -> p <> canonical_base_id
+              end
+
+            {:ok, {provider, returned_id, model}}
         end
     end
   end
@@ -207,14 +249,24 @@ defmodule LLMModels.Spec do
     providers = Map.keys(snapshot.providers_by_id)
 
     Enum.flat_map(providers, fn provider ->
-      key = {provider, model_id}
+      {lookup_id, prefix} = lookup_id_and_prefix(provider, model_id)
 
-      canonical_id = Map.get(snapshot.aliases_by_key, key, model_id)
-      canonical_key = {provider, canonical_id}
+      key = {provider, lookup_id}
+      canonical_base_id = Map.get(snapshot.aliases_by_key, key, lookup_id)
+      canonical_key = {provider, canonical_base_id}
 
       case Map.get(snapshot.models_by_key, canonical_key) do
-        nil -> []
-        model -> [{provider, canonical_id, model}]
+        nil ->
+          []
+
+        model ->
+          returned_id =
+            case prefix do
+              nil -> canonical_base_id
+              p -> p <> canonical_base_id
+            end
+
+          [{provider, returned_id, model}]
       end
     end)
   end

@@ -1,241 +1,247 @@
-defmodule Mix.Tasks.LLMModels.Pull do
+defmodule Mix.Tasks.LlmModels.Pull do
   use Mix.Task
 
-  @shortdoc "Pull latest model metadata and regenerate snapshot"
+  @shortdoc "Pull latest data from all configured remote sources"
 
   @moduledoc """
-  Fetches the latest model metadata from models.dev, syncs it locally,
-  and regenerates the packaged snapshot with valid providers module.
+  Pulls latest model metadata from all configured remote sources and caches locally.
+
+  This task iterates through all sources configured in `Config.sources!()` and calls
+  their optional `pull/1` callback (if implemented). Sources without a `pull/1` callback
+  are skipped. Fetched data is saved to cache directories (typically `priv/llm_models/upstream/`
+  or `priv/llm_models/remote/`).
+
+  After pulling, the task generates the `ValidProviders` module from all upstream data
+  to prevent atom leaking at runtime.
+
+  To build the final snapshot from fetched data, run `mix llm_models.build`.
 
   ## Usage
 
-      mix llm_models.pull [--url URL]
+      mix llm_models.pull
 
-  ## Options
+  ## Configuration
 
-    * `--url` - Source URL (default: https://models.dev/api.json)
+  Configure sources in your application config:
+
+      config :llm_models,
+        sources: [
+          {LLMModels.Sources.ModelsDev, %{}},
+          {LLMModels.Sources.Local, %{dir: "priv/llm_models"}},
+          {LLMModels.Sources.Config, %{overrides: %{...}}}
+        ]
+
+  Only sources that implement the optional `pull/1` callback will be pulled.
+  Typically only remote sources like `ModelsDev` implement this callback.
 
   ## Examples
 
+      # Pull from all configured remote sources
       mix llm_models.pull
-      mix llm_models.pull --url https://custom-source.com/models.json
+
+  ## Output
+
+  The task prints a summary of pull results:
+
+      Pulling from configured sources...
+
+      ✓ LLMModels.Sources.ModelsDev: Updated (709.2 KB)
+      ○ LLMModels.Sources.OpenRouter: Not modified
+      - LLMModels.Sources.Local: No pull callback (skipped)
+
+      Summary: 1 updated, 1 unchanged, 1 skipped, 0 failed
+
+      Generating valid_providers.ex...
+      ✓ Generated with 69 providers
+
+      Run 'mix llm_models.build' to generate snapshot.json
   """
 
-  @default_url "https://models.dev/api.json"
-  @upstream_path "priv/llm_models/upstream.json"
-  @snapshot_path "priv/llm_models/snapshot.json"
+  @default_upstream_dir "priv/llm_models/upstream"
 
   @impl Mix.Task
-  def run(args) do
-    {opts, _remaining, _invalid} =
-      OptionParser.parse(args, strict: [url: :string])
+  def run(_args) do
+    Mix.Task.run("app.start")
 
-    url = Keyword.get(opts, :url, @default_url)
+    sources = LLMModels.Config.sources!()
 
-    Mix.shell().info("Fetching model metadata from #{url}...")
-
-    case download(url) do
-      {:ok, body} ->
-        save_file(@upstream_path, body)
-        save_manifest(@upstream_path, url, body)
-        Mix.shell().info("✓ Pulled metadata to #{@upstream_path}")
-
-        activate_snapshot()
-
-      {:error, reason} ->
-        Mix.raise("Failed to download from #{url}: #{inspect(reason)}")
+    if sources == [] do
+      Mix.shell().info("No sources configured. Add sources to your config:")
+      Mix.shell().info("")
+      Mix.shell().info("  config :llm_models,")
+      Mix.shell().info("    sources: [")
+      Mix.shell().info("      {LLMModels.Sources.ModelsDev, %{}}")
+      Mix.shell().info("    ]")
+      Mix.shell().info("")
+      Mix.raise("No sources configured")
     end
+
+    Mix.shell().info("Pulling from configured sources...\n")
+
+    results = pull_all_sources(sources)
+    print_summary(results)
+    generate_valid_providers()
+
+    Mix.shell().info("\nRun 'mix llm_models.build' to generate snapshot.json")
   end
 
-  defp download(url) do
-    case Req.get(url) do
-      {:ok, %Req.Response{status: 200, body: body}} ->
-        {:ok, body}
-
-      {:ok, %Req.Response{status: status}} ->
-        {:error, "HTTP #{status}"}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp save_file(path, content) do
-    path
-    |> Path.dirname()
-    |> File.mkdir_p!()
-
-    File.write!(path, content)
-  end
-
-  defp save_manifest(json_path, url, content) do
-    manifest_path = String.replace_suffix(json_path, ".json", ".manifest.json")
-
-    sha256 = :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
-
-    manifest = %{
-      source_url: url,
-      downloaded_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      sha256: sha256,
-      size_bytes: byte_size(content)
-    }
-
-    manifest_json = Jason.encode!(manifest, pretty: true)
-    File.write!(manifest_path, manifest_json)
-
-    Mix.shell().info("  Downloaded #{byte_size(content)} bytes")
-    Mix.shell().info("  SHA256: #{sha256}")
-  end
-
-  defp activate_snapshot do
-    Mix.shell().info("\nActivating snapshot...")
-
-    upstream_data = read_upstream(@upstream_path)
-    write_temp_snapshot(upstream_data)
-    config = build_config()
-
-    case LLMModels.Engine.run(config) do
-      {:ok, snapshot} ->
-        save_final_snapshot(snapshot)
-        generate_valid_providers_module(snapshot)
-        print_summary(snapshot)
-
-      {:error, :empty_catalog} ->
-        Mix.raise("Activation failed: resulting catalog is empty")
-
-      {:error, reason} ->
-        Mix.raise("Activation failed: #{inspect(reason)}")
-    end
-  end
-
-  defp read_upstream(path) do
-    case File.read(path) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, data} -> data
-          {:error, reason} -> Mix.raise("Failed to parse JSON: #{inspect(reason)}")
-        end
-
-      {:error, reason} ->
-        Mix.raise("Failed to read #{path}: #{inspect(reason)}")
-    end
-  end
-
-  defp write_temp_snapshot(upstream_data) do
-    temp_path = LLMModels.Packaged.path()
-
-    temp_path
-    |> Path.dirname()
-    |> File.mkdir_p!()
-
-    {providers, all_models} = transform_upstream_data(upstream_data)
-
-    providers = atomize_keys(providers)
-    models = atomize_keys(all_models)
-
-    temp_data = %{providers: providers, models: models}
-
-    json = Jason.encode!(temp_data)
-    File.write!(temp_path, json)
-  end
-
-  defp transform_upstream_data(data) do
-    providers =
-      data
-      |> Enum.reject(fn {_key, value} -> not is_map(value) end)
-      |> Enum.map(fn {_key, provider} ->
-        provider
-        |> Map.drop(["models"])
-        |> Map.take(["id", "env", "npm", "api", "name", "doc"])
-      end)
-
-    all_models =
-      data
-      |> Enum.reject(fn {_key, value} -> not is_map(value) end)
-      |> Enum.flat_map(fn {_key, provider} ->
-        models = Map.get(provider, "models", %{})
-
-        models
-        |> Enum.map(fn {_model_key, model} ->
-          Map.put(model, "provider", provider["id"])
-        end)
-      end)
-
-    {providers, all_models}
-  end
-
-  defp build_config do
-    app_config = Application.get_all_env(:llm_models)
-    overrides_from_app = Keyword.get(app_config, :overrides, %{})
-
-    overrides = %{
-      providers: normalize_overrides(Map.get(overrides_from_app, :providers, [])),
-      models: normalize_overrides(Map.get(overrides_from_app, :models, [])),
-      exclude: Map.get(overrides_from_app, :exclude, %{})
-    }
-
-    [
-      config: %{
-        compile_embed: false,
-        overrides: overrides,
-        overrides_module: nil,
-        allow: Keyword.get(app_config, :allow, :all),
-        deny: Keyword.get(app_config, :deny, %{}),
-        prefer: Keyword.get(app_config, :prefer, [])
-      }
-    ]
-  end
-
-  defp normalize_overrides(list) when is_list(list), do: list
-  defp normalize_overrides(_), do: []
-
-  defp atomize_keys(list) when is_list(list) do
-    Enum.map(list, &atomize_keys/1)
-  end
-
-  defp atomize_keys(map) when is_map(map) do
-    Map.new(map, fn {k, v} ->
-      key = if is_binary(k), do: String.to_atom(k), else: k
-
-      value =
-        if key == :provider and is_binary(v) do
-          case LLMModels.Normalize.normalize_provider_id(v, unsafe: true) do
-            {:ok, atom} -> atom
-            _ -> atomize_keys(v)
-          end
-        else
-          atomize_keys(v)
-        end
-
-      {key, value}
+  # Pull from all sources and return list of {module, result} tuples
+  defp pull_all_sources(sources) do
+    Enum.map(sources, fn {module, opts} ->
+      {module, pull_source(module, opts)}
     end)
   end
 
-  defp atomize_keys(value), do: value
-
-  defp save_final_snapshot(snapshot) do
-    @snapshot_path
-    |> Path.dirname()
-    |> File.mkdir_p!()
-
-    output_data = %{
-      providers: snapshot.providers,
-      models: Map.values(snapshot.models) |> List.flatten()
-    }
-
-    json = Jason.encode!(output_data, pretty: true)
-    File.write!(@snapshot_path, json)
-
-    Mix.shell().info("✓ Snapshot written to #{@snapshot_path}")
+  # Pull from a single source
+  defp pull_source(module, opts) do
+    if has_pull_callback?(module) do
+      case module.pull(opts) do
+        :noop -> :not_modified
+        {:ok, path} -> {:ok, path}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :no_callback
+    end
   end
 
-  defp generate_valid_providers_module(snapshot) do
-    provider_atoms =
-      snapshot.providers
-      |> Enum.map(& &1.id)
-      |> Enum.sort()
-      |> Enum.uniq()
+  # Check if module implements pull/1 callback
+  defp has_pull_callback?(module) do
+    Code.ensure_loaded?(module) && function_exported?(module, :pull, 1)
+  end
 
+  # Print summary of pull results
+  defp print_summary(results) do
+    updated = Enum.count(results, fn {_, r} -> match?({:ok, _}, r) end)
+    unchanged = Enum.count(results, fn {_, r} -> r == :not_modified end)
+    skipped = Enum.count(results, fn {_, r} -> r == :no_callback end)
+    failed = Enum.count(results, fn {_, r} -> match?({:error, _}, r) end)
+
+    Enum.each(results, fn {module, result} ->
+      print_source_result(module, result)
+    end)
+
+    Mix.shell().info("")
+
+    Mix.shell().info(
+      "Summary: #{updated} updated, #{unchanged} unchanged, #{skipped} skipped, #{failed} failed"
+    )
+  end
+
+  # Print result for a single source
+  defp print_source_result(module, result) do
+    module_name = inspect(module)
+
+    case result do
+      {:ok, path} ->
+        size = file_size_kb(path)
+        Mix.shell().info("✓ #{module_name}: Updated (#{size} KB)")
+
+      :not_modified ->
+        Mix.shell().info("○ #{module_name}: Not modified")
+
+      :no_callback ->
+        Mix.shell().info("- #{module_name}: No pull callback (skipped)")
+
+      {:error, reason} ->
+        Mix.shell().error("✗ #{module_name}: Failed - #{format_error(reason)}")
+    end
+  end
+
+  # Get file size in KB
+  defp file_size_kb(path) do
+    case File.stat(path) do
+      {:ok, %{size: size}} ->
+        kb = div(size, 1024)
+        Float.round(kb * 1.0, 1)
+
+      _ ->
+        "?"
+    end
+  end
+
+  # Format error reason for display
+  defp format_error({:http_status, status}), do: "HTTP #{status}"
+  defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_error(reason), do: inspect(reason)
+
+  # Generate ValidProviders module from all upstream data
+  defp generate_valid_providers do
+    Mix.shell().info("\nGenerating valid_providers.ex...")
+
+    upstream_dir = get_upstream_dir()
+
+    # Find all upstream JSON files (exclude manifest files)
+    cache_files =
+      case File.ls(upstream_dir) do
+        {:ok, files} ->
+          files
+          |> Enum.filter(&String.ends_with?(&1, ".json"))
+          |> Enum.reject(&String.ends_with?(&1, ".manifest.json"))
+
+        {:error, :enoent} ->
+          []
+
+        {:error, reason} ->
+          Mix.raise("Failed to read upstream directory: #{inspect(reason)}")
+      end
+
+    if cache_files == [] do
+      Mix.shell().info("  ○ No upstream data found - skipping")
+    else
+      # Collect all provider atoms from all upstream files
+      all_providers =
+        cache_files
+        |> Enum.flat_map(fn file ->
+          path = Path.join(upstream_dir, file)
+          extract_providers_from_file(path)
+        end)
+        |> Enum.sort()
+        |> Enum.uniq()
+
+      if all_providers == [] do
+        Mix.shell().info("  ○ No providers found in upstream data - skipping")
+      else
+        write_valid_providers_module(all_providers)
+        Mix.shell().info("  ✓ Generated with #{length(all_providers)} providers")
+      end
+    end
+  end
+
+  # Extract provider atoms from a single upstream file
+  defp extract_providers_from_file(path) do
+    case File.read(path) do
+      {:ok, bin} ->
+        case Jason.decode(bin) do
+          {:ok, data} -> extract_provider_atoms(data)
+          {:error, _} -> []
+        end
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  # Extract provider atoms from decoded JSON data
+  defp extract_provider_atoms(data) when is_map(data) do
+    # models.dev format: top-level keys are provider IDs
+    # Each provider has "id", "name", "models" fields
+    data
+    |> Map.keys()
+    |> Enum.map(fn key ->
+      cond do
+        is_atom(key) -> key
+        is_binary(key) -> String.to_atom(key)
+        true -> nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp extract_provider_atoms(_), do: []
+
+  # Write the ValidProviders module to disk
+  defp write_valid_providers_module(provider_atoms) do
     module_code = """
     defmodule LLMModels.Generated.ValidProviders do
       @moduledoc \"\"\"
@@ -265,20 +271,12 @@ defmodule Mix.Tasks.LLMModels.Pull do
     """
 
     module_path = "lib/llm_models/generated/valid_providers.ex"
+    File.mkdir_p!(Path.dirname(module_path))
     formatted = Code.format_string!(module_code)
     File.write!(module_path, formatted)
-
-    provider_count = length(provider_atoms)
-    Mix.shell().info("✓ Generated valid_providers.ex with #{provider_count} provider atoms")
   end
 
-  defp print_summary(snapshot) do
-    provider_count = length(snapshot.providers)
-    model_count = Map.values(snapshot.models) |> Enum.map(&length/1) |> Enum.sum()
-
-    Mix.shell().info("")
-    Mix.shell().info("Summary:")
-    Mix.shell().info("  Providers: #{provider_count}")
-    Mix.shell().info("  Models: #{model_count}")
+  defp get_upstream_dir do
+    Application.get_env(:llm_models, :upstream_cache_dir, @default_upstream_dir)
   end
 end

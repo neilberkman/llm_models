@@ -1,38 +1,55 @@
 defmodule LLMModels.Engine do
   @moduledoc """
-  Orchestrates the complete ETL pipeline for LLM model catalog generation.
+  Pure ETL pipeline for BUILD-TIME LLM model catalog generation.
+
+  Engine is a pure function: sources in, snapshot out. It processes ONLY
+  the sources explicitly passed via options or configured sources - no
+  packaged base layer, no runtime overrides.
+
+  This module is designed for BUILD-TIME use (e.g., mix tasks) to generate
+  snapshots from remote/local sources that will be packaged into the library.
+
+  ## Pipeline Stages
+
+  1. **Ingest** - Load data from configured sources
+  2. **Normalize** - Apply normalization to providers and models per layer
+  3. **Validate** - Validate schemas and log dropped records per layer
+  4. **Merge** - Combine layers with precedence rules (last wins)
+  5. **Finalize** - Filter, enrich, and index the final catalog
+  6. **Ensure viable** - Verify catalog has content (warns if empty)
+
+  ## Architecture
+
+  Sources are processed in order with last-wins precedence:
+  1. First source (lowest precedence)
+  2. Second source
+  3. ... (higher precedence)
+  4. Last source (highest precedence)
 
   The engine coordinates data ingestion, normalization, validation, merging,
-  enrichment, filtering, and indexing to produce a comprehensive model snapshot.
+  and finalization to produce a comprehensive model snapshot.
   """
 
   require Logger
 
-  alias LLMModels.{Config, Normalize, Validate, Merge, Enrich}
+  alias LLMModels.{Config, Enrich, Merge, Normalize, Validate}
 
   @doc """
   Runs the complete ETL pipeline to generate a model catalog snapshot.
 
-  ## Pipeline Stages
-
-  1. **Ingest** - Collect data from sources in precedence order
-  2. **Normalize** - Apply normalization to providers and models per layer
-  3. **Validate** - Validate schemas and log dropped records per layer
-  4. **Merge** - Combine layers with precedence rules
-  5. **Enrich** - Add derived fields and defaults
-  6. **Filter** - Apply allow/deny patterns
-  7. **Index** - Build lookup indexes
-  8. **Ensure viable** - Verify catalog has content
+  Pure function that processes sources into a snapshot. BUILD-TIME only.
 
   ## Options
 
-  - `:sources` - List of `{module, opts}` source tuples (optional, overrides config)
-  - `:runtime_overrides` - Runtime override data (optional)
+  - `:sources` - List of `{module, opts}` source tuples (optional, defaults to Config.sources!())
+  - `:allow` - Allow patterns (optional, defaults to Config allow)
+  - `:deny` - Deny patterns (optional, defaults to Config deny)
+  - `:prefer` - List of preferred provider atoms (optional, defaults to Config prefer)
 
   ## Returns
 
   - `{:ok, snapshot_map}` - Success with indexed snapshot
-  - `{:error, :empty_catalog}` - No providers or models in final catalog
+  - `{:ok, snapshot_map}` - Empty catalog (warns but succeeds if no sources)
   - `{:error, term}` - Other error
 
   ## Snapshot Structure
@@ -56,15 +73,13 @@ defmodule LLMModels.Engine do
          {:ok, normalized} <- normalize_layers(layers_data),
          {:ok, validated} <- validate_layers(normalized),
          {:ok, merged} <- merge_layers(validated),
-         {:ok, enriched} <- enrich(merged),
-         {:ok, filtered} <- filter(enriched),
-         {:ok, snapshot} <- build_snapshot(filtered),
+         {:ok, snapshot} <- finalize(merged),
          :ok <- ensure_viable(snapshot) do
       {:ok, snapshot}
     end
   end
 
-  # Stage 1: Ingest - load data from all sources
+  # Stage 1: Ingest - load data from configured sources only
   defp ingest(opts) do
     config = Config.get()
 
@@ -75,18 +90,13 @@ defmodule LLMModels.Engine do
         sources when is_list(sources) -> sources
       end
 
-    # Add runtime overrides if provided
-    sources_list =
-      case Keyword.get(opts, :runtime_overrides) do
-        nil ->
-          sources_list
-
-        overrides ->
-          sources_list ++ [{LLMModels.Sources.Runtime, %{overrides: overrides}}]
-      end
+    # Warn if no sources provided
+    if sources_list == [] do
+      Logger.warning("No sources configured - catalog will be empty")
+    end
 
     # Load data from each source
-    layers =
+    source_layers =
       Enum.map(sources_list, fn {module, source_opts} ->
         case module.load(source_opts) do
           {:ok, data} ->
@@ -109,13 +119,14 @@ defmodule LLMModels.Engine do
         end
       end)
 
+    # Get filters and prefer from opts or config
     layers_data = %{
-      layers: layers,
+      layers: source_layers,
       filters: %{
-        allow: config.allow,
-        deny: config.deny
+        allow: Keyword.get(opts, :allow, config.allow),
+        deny: Keyword.get(opts, :deny, config.deny)
       },
-      prefer: config.prefer
+      prefer: Keyword.get(opts, :prefer, config.prefer)
     }
 
     {:ok, layers_data}
@@ -193,46 +204,27 @@ defmodule LLMModels.Engine do
     {:ok, merged}
   end
 
-  # Stage 5: Enrich
-  defp enrich(merged) do
-    enriched = %{
-      providers: merged.providers,
-      models: Enrich.enrich_models(merged.models),
-      filters: merged.filters,
-      prefer: merged.prefer
-    }
+  # Stage 5: Finalize (Filter → Enrich → Index)
+  defp finalize(merged) do
+    # Step 1: Filter - compile and apply allow/deny patterns
+    compiled_filters = Config.compile_filters(merged.filters.allow, merged.filters.deny)
+    filtered_models = apply_filters(merged.models, compiled_filters)
 
-    {:ok, enriched}
-  end
+    # Step 2: Enrich - derive family, ensure provider_model_id, apply defaults
+    enriched_models = Enrich.enrich_models(filtered_models)
 
-  # Stage 6: Filter
-  defp filter(enriched) do
-    compiled_filters = Config.compile_filters(enriched.filters.allow, enriched.filters.deny)
+    # Step 3: Index - build lookup indexes for O(1) access
+    indexes = build_indexes(merged.providers, enriched_models)
 
-    filtered_models = apply_filters(enriched.models, compiled_filters)
-
-    filtered = %{
-      providers: enriched.providers,
-      models: filtered_models,
-      filters: compiled_filters,
-      prefer: enriched.prefer
-    }
-
-    {:ok, filtered}
-  end
-
-  # Stage 7: Build snapshot
-  defp build_snapshot(filtered) do
-    indexes = build_indexes(filtered.providers, filtered.models)
-
+    # Step 4: Build snapshot structure
     snapshot = %{
       providers_by_id: indexes.providers_by_id,
       models_by_key: indexes.models_by_key,
       aliases_by_key: indexes.aliases_by_key,
-      providers: filtered.providers,
+      providers: merged.providers,
       models: indexes.models_by_provider,
-      filters: filtered.filters,
-      prefer: filtered.prefer,
+      filters: compiled_filters,
+      prefer: merged.prefer,
       meta: %{
         epoch: nil,
         generated_at: DateTime.utc_now() |> DateTime.to_iso8601()
@@ -242,9 +234,16 @@ defmodule LLMModels.Engine do
     {:ok, snapshot}
   end
 
-  # Stage 8: Ensure viable
+  # Stage 6: Ensure viable - warn on empty catalog but don't error
   defp ensure_viable(snapshot) do
-    Validate.ensure_viable(snapshot.providers, Map.values(snapshot.models) |> List.flatten())
+    providers = snapshot.providers
+    models = Map.values(snapshot.models) |> List.flatten()
+
+    if providers == [] or models == [] do
+      Logger.warning("Empty catalog generated - no providers or models found")
+    end
+
+    :ok
   end
 
   @doc """

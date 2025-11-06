@@ -18,13 +18,13 @@ Fast, persistent_term-backed LLM model metadata catalog with explicit refresh co
 - **Explicit refresh**: Manual updates only via `mix llm_models.pull`
 - **Capability-based selection**: Find models by features (tools, JSON mode, streaming, etc.)
 - **Canonical spec parsing**: Owns "provider:model" format parsing and resolution
-- **Flexible overrides**: Configure via `config.exs` or custom behaviour modules
+- **Flexible data sources**: Configure via pluggable Source modules
 
 ### Key Features
 
 - **No magic**: Stability-first design with explicit semantics
 - **Simple allow/deny filtering**: Control which models are available
-- **Precedence rules**: Packaged snapshot < config overrides < behaviour overrides
+- **Precedence rules**: Sources are merged in configuration order (first = lowest, last = highest)
 - **Forward compatible**: Unknown upstream keys pass through to `extra` field
 - **Minimal dependencies**: Only `zoi` (validation) and `jason` (JSON)
 
@@ -267,34 +267,31 @@ Configure `llm_models` in your `config/config.exs`:
 
 ```elixir
 config :llm_models,
-  # Embed snapshot at compile time (default: false)
-  compile_embed: false,
+  # Embed snapshot at compile time for zero runtime IO (default: false)
+  compile_embed: true,
 
-  # Provider and model overrides
-  overrides: %{
-    providers: [
-      %{id: :openai, env: ["OPENAI_API_KEY"]},
-      %{id: :anthropic, env: ["ANTHROPIC_API_KEY"]}
-    ],
-    models: [
-      %{
-        id: "gpt-4o-mini",
-        provider: :openai,
-        capabilities: %{
-          tools: %{enabled: true, streaming: false},
-          json: %{native: true}
+  # Configure OPTIONAL data sources (merged on top of packaged snapshot)
+  # Default: [] (only use packaged snapshot - stable, version-pinned)
+  sources: [
+    {LLMModels.Sources.ModelsDev, %{}},
+    {LLMModels.Sources.Local, %{dir: "priv/llm_models"}},
+    {LLMModels.Sources.Config, %{
+      overrides: %{
+        openai: %{
+          env: ["OPENAI_API_KEY"],
+          models: [
+            %{
+              id: "gpt-4o-mini",
+              capabilities: %{
+                tools: %{enabled: true, streaming: false},
+                json: %{native: true}
+              }
+            }
+          ]
         }
       }
-    ],
-    # Exclude specific models (supports glob patterns)
-    exclude: %{
-      openai: ["gpt-5-pro", "o3-*"],
-      anthropic: ["claude-instant-*"]
-    }
-  },
-
-  # Custom overrides module (see below)
-  overrides_module: MyApp.LlmModelOverrides,
+    }}
+  ],
 
   # Global allow/deny filters
   allow: %{
@@ -309,70 +306,31 @@ config :llm_models,
   prefer: [:openai, :anthropic, :google_vertex]
 ```
 
+### Data Sources
+
+**By default**, the library uses only the packaged snapshot (stable, version-pinned).
+
+You can configure **optional** sources that merge on top of the packaged base:
+
+- **`LLMModels.Sources.ModelsDev`** - Remote data from models.dev with local caching
+- **`LLMModels.Sources.Local`** - Load from TOML files in a directory
+- **`LLMModels.Sources.Config`** - Provider-keyed config overrides
+
+**Note:** The packaged snapshot is NOT a source - it's the pre-processed base
+that always loads first. Sources provide additional data merged on top.
+
+See [OVERVIEW.md](OVERVIEW.md) for detailed source documentation.
+
 ### Precedence Rules
 
-Sources are merged in this order (later wins):
+**Precedence (lowest to highest):**
+1. Packaged snapshot (always loaded)
+2. Configured sources (optional)
+3. Runtime overrides (if provided)
 
-1. **Packaged snapshot** (bundled in `priv/llm_models/snapshot.json`)
-2. **Config overrides** (`:llm_models, :overrides`)
-3. **Behaviour overrides** (`:llm_models, :overrides_module`)
-
-For maps, fields are deep-merged. For lists, values are deduplicated. For scalars, higher precedence wins.
+For maps, fields are deep-merged. For lists (except `:aliases`), last wins. For scalars, higher precedence wins.
 
 **Deny always wins over allow.**
-
-## Custom Overrides
-
-For more control, implement the `LLMModels.Overrides` behaviour:
-
-```elixir
-defmodule MyApp.LlmModelOverrides do
-  use LLMModels.Overrides
-
-  @impl true
-  def providers do
-    [
-      %{id: :openai, env: ["OPENAI_API_KEY"], base_url: "https://api.openai.com"},
-      %{id: :custom_provider, env: ["CUSTOM_API_KEY"], base_url: "https://custom.ai"}
-    ]
-  end
-
-  @impl true
-  def models do
-    [
-      %{
-        id: "gpt-4o-mini",
-        provider: :openai,
-        capabilities: %{
-          tools: %{enabled: true, streaming: false},
-          json: %{native: true, schema: true}
-        }
-      },
-      %{
-        id: "custom-model",
-        provider: :custom_provider,
-        capabilities: %{chat: true}
-      }
-    ]
-  end
-
-  @impl true
-  def excludes do
-    %{
-      openai: ["gpt-5-pro", "o3-*"],
-      anthropic: ["claude-instant-*"]
-    }
-  end
-end
-```
-
-Then configure the module:
-
-```elixir
-config :llm_models, overrides_module: MyApp.LlmModelOverrides
-```
-
-The `use LLMModels.Overrides` macro provides default implementations (empty lists/maps), so you only need to override what you need.
 
 ## Updating Model Data
 
@@ -491,13 +449,13 @@ model.cost.input                    #=> 0.15
 - `model/1` - Parse "provider:model" spec
 - `resolve/2` - Resolve spec to model record
 
-### Behaviour: `LLMModels.Overrides`
+### Behaviour: `LLMModels.Source`
 
 **Callbacks:**
 
-- `providers/0` - Return provider overrides
-- `models/0` - Return model overrides
-- `excludes/0` - Return exclusion patterns
+- `load/1` - Load provider and model data from the source
+
+See [OVERVIEW.md](OVERVIEW.md) for detailed source documentation and examples.
 
 ### Mix Tasks
 

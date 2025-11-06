@@ -11,24 +11,43 @@ defmodule LLMModels.EngineTest do
     :ok
   end
 
+  # Minimal test data for basic tests
+  defp minimal_test_data do
+    %{
+      providers: [%{id: :test_provider, name: "Test Provider"}],
+      models: [
+        %{
+          id: "test-model",
+          provider: :test_provider,
+          capabilities: %{chat: true},
+          aliases: ["test-alias"]
+        }
+      ]
+    }
+  end
+
   # Helper to convert old test config format to new sources format
   defp run_with_test_data(config) when is_map(config) do
-    runtime_overrides = %{
+    # Use Config source with legacy format (providers/models keys)
+    overrides = %{
       providers: get_in(config, [:overrides, :providers]) || [],
       models: get_in(config, [:overrides, :models]) || []
     }
+
+    sources = [{LLMModels.Sources.Config, %{overrides: overrides}}]
 
     # Set application env for filters
     if Map.has_key?(config, :allow), do: Application.put_env(:llm_models, :allow, config.allow)
     if Map.has_key?(config, :deny), do: Application.put_env(:llm_models, :deny, config.deny)
     if Map.has_key?(config, :prefer), do: Application.put_env(:llm_models, :prefer, config.prefer)
 
-    Engine.run(runtime_overrides: runtime_overrides)
+    Engine.run(sources: sources)
   end
 
   describe "run/1" do
-    test "runs complete ETL pipeline with packaged snapshot" do
-      {:ok, snapshot} = Engine.run()
+    test "runs complete ETL pipeline with test data" do
+      sources = [{LLMModels.Sources.Config, %{overrides: minimal_test_data()}}]
+      {:ok, snapshot} = Engine.run(sources: sources)
 
       assert is_map(snapshot)
       assert Map.has_key?(snapshot, :providers_by_id)
@@ -42,7 +61,7 @@ defmodule LLMModels.EngineTest do
     end
 
     test "snapshot has correct metadata structure" do
-      {:ok, snapshot} = Engine.run()
+      {:ok, snapshot} = Engine.run(runtime_overrides: minimal_test_data(), sources: [])
 
       assert Map.has_key?(snapshot.meta, :epoch)
       assert Map.has_key?(snapshot.meta, :generated_at)
@@ -50,7 +69,7 @@ defmodule LLMModels.EngineTest do
     end
 
     test "builds provider index correctly" do
-      {:ok, snapshot} = Engine.run()
+      {:ok, snapshot} = Engine.run(runtime_overrides: minimal_test_data(), sources: [])
 
       if map_size(snapshot.providers_by_id) > 0 do
         {provider_id, provider} = Enum.at(snapshot.providers_by_id, 0)
@@ -60,7 +79,7 @@ defmodule LLMModels.EngineTest do
     end
 
     test "builds model key index correctly" do
-      {:ok, snapshot} = Engine.run()
+      {:ok, snapshot} = Engine.run(runtime_overrides: minimal_test_data(), sources: [])
 
       if map_size(snapshot.models_by_key) > 0 do
         {{provider, model_id}, model} = Enum.at(snapshot.models_by_key, 0)
@@ -72,7 +91,7 @@ defmodule LLMModels.EngineTest do
     end
 
     test "builds models by provider index correctly" do
-      {:ok, snapshot} = Engine.run()
+      {:ok, snapshot} = Engine.run(runtime_overrides: minimal_test_data(), sources: [])
 
       if map_size(snapshot.models) > 0 do
         {provider, models_list} = Enum.at(snapshot.models, 0)
@@ -86,7 +105,7 @@ defmodule LLMModels.EngineTest do
     end
 
     test "builds aliases index correctly" do
-      {:ok, snapshot} = Engine.run()
+      {:ok, snapshot} = Engine.run(runtime_overrides: minimal_test_data(), sources: [])
 
       if map_size(snapshot.aliases_by_key) > 0 do
         {{provider, alias_name}, canonical_id} = Enum.at(snapshot.aliases_by_key, 0)

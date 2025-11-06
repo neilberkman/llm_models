@@ -9,7 +9,8 @@ defmodule LLMModels.SpecTest do
     providers = [
       %{id: :openai, name: "OpenAI"},
       %{id: :anthropic, name: "Anthropic"},
-      %{id: :google_vertex, name: "Google Vertex AI"}
+      %{id: :google_vertex, name: "Google Vertex AI"},
+      %{id: :bedrock, name: "Amazon Bedrock"}
     ]
 
     models = [
@@ -53,6 +54,18 @@ defmodule LLMModels.SpecTest do
         id: "shared-model",
         provider: :anthropic,
         name: "Shared Model Anthropic",
+        aliases: []
+      },
+      %{
+        id: "anthropic.claude-opus-4-1-20250805-v1:0",
+        provider: :bedrock,
+        name: "Claude Opus 4.1",
+        aliases: ["anthropic.claude-opus"]
+      },
+      %{
+        id: "meta.llama3-2-3b-instruct-v1:0",
+        provider: :bedrock,
+        name: "Llama 3.2 3B",
         aliases: []
       }
     ]
@@ -325,6 +338,125 @@ defmodule LLMModels.SpecTest do
       {:ok, {provider, canonical_id, _}} = Spec.resolve("anthropic:claude-opus")
       assert provider == :anthropic
       assert canonical_id == "claude-3-opus"
+    end
+  end
+
+  describe "resolve/2 with Bedrock inference profiles" do
+    test "resolves inference profile with us. prefix" do
+      assert {:ok, {:bedrock, "us.anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve("bedrock:us.anthropic.claude-opus-4-1-20250805-v1:0")
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+      assert model.name == "Claude Opus 4.1"
+    end
+
+    test "resolves inference profile with global. prefix" do
+      assert {:ok, {:bedrock, "global.anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve("bedrock:global.anthropic.claude-opus-4-1-20250805-v1:0")
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+    end
+
+    test "resolves inference profile with eu. prefix" do
+      assert {:ok, {:bedrock, "eu.meta.llama3-2-3b-instruct-v1:0", model}} =
+               Spec.resolve("bedrock:eu.meta.llama3-2-3b-instruct-v1:0")
+
+      assert model.id == "meta.llama3-2-3b-instruct-v1:0"
+      assert model.name == "Llama 3.2 3B"
+    end
+
+    test "resolves inference profile with ap. prefix" do
+      assert {:ok, {:bedrock, "ap.anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve("bedrock:ap.anthropic.claude-opus-4-1-20250805-v1:0")
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+    end
+
+    test "resolves inference profile with ca. prefix" do
+      assert {:ok, {:bedrock, "ca.anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve("bedrock:ca.anthropic.claude-opus-4-1-20250805-v1:0")
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+    end
+
+    test "resolves native Bedrock model without prefix" do
+      assert {:ok, {:bedrock, "anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve("bedrock:anthropic.claude-opus-4-1-20250805-v1:0")
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+    end
+
+    test "resolves inference profile with tuple input" do
+      assert {:ok, {:bedrock, "us.anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve({:bedrock, "us.anthropic.claude-opus-4-1-20250805-v1:0"})
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+    end
+
+    test "resolves inference profile alias to canonical with prefix preserved" do
+      assert {:ok, {:bedrock, "us.anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve("bedrock:us.anthropic.claude-opus")
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+      assert model.name == "Claude Opus 4.1"
+    end
+
+    test "resolves inference profile alias with different prefix" do
+      assert {:ok, {:bedrock, "global.anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve("bedrock:global.anthropic.claude-opus")
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+    end
+
+    test "returns error for inference profile with nonexistent base model" do
+      assert {:error, :not_found} = Spec.resolve("bedrock:us.nonexistent.model")
+    end
+
+    test "preserves prefix for bare alias resolution with scope" do
+      assert {:ok, {:bedrock, "us.anthropic.claude-opus-4-1-20250805-v1:0", model}} =
+               Spec.resolve("us.anthropic.claude-opus", scope: :bedrock)
+
+      assert model.id == "anthropic.claude-opus-4-1-20250805-v1:0"
+    end
+
+    test "only strips known Bedrock prefixes, not arbitrary prefixes" do
+      assert {:error, :not_found} =
+               Spec.resolve("bedrock:unknown.anthropic.claude-opus-4-1-20250805-v1:0")
+    end
+
+    test "does not affect non-Bedrock providers with similar prefixes" do
+      # Add a model that starts with "us." to OpenAI
+      Store.clear!()
+
+      providers = [
+        %{id: :openai, name: "OpenAI"}
+      ]
+
+      models = [
+        %{
+          id: "us.model-123",
+          provider: :openai,
+          name: "US Model",
+          aliases: []
+        }
+      ]
+
+      providers_by_id = Map.new(providers, fn p -> {p.id, p} end)
+      models_by_key = Map.new(models, fn m -> {{m.provider, m.id}, m} end)
+      models_by_provider = Enum.group_by(models, & &1.provider)
+
+      snapshot = %{
+        providers_by_id: providers_by_id,
+        models_by_key: models_by_key,
+        models_by_provider: models_by_provider,
+        aliases_by_key: %{}
+      }
+
+      Store.put!(snapshot, [])
+
+      # For non-Bedrock providers, "us." should NOT be stripped
+      assert {:ok, {:openai, "us.model-123", model}} = Spec.resolve("openai:us.model-123")
+      assert model.id == "us.model-123"
     end
   end
 end

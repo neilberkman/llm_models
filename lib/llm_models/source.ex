@@ -53,9 +53,13 @@ defmodule LLMModels.Source do
   @type model_map :: map()
   @type data :: %{required(String.t()) => provider_map}
   @type opts :: map()
+  @type pull_result :: :noop | {:ok, String.t()} | {:error, term()}
 
   @doc """
   Load data from this source.
+
+  For remote sources, this should read from locally cached data (no network calls).
+  Run `mix llm_models.pull` to fetch and cache remote data first.
 
   ## Parameters
 
@@ -67,4 +71,28 @@ defmodule LLMModels.Source do
   - `{:error, term}` - Fatal error (source cannot produce any data)
   """
   @callback load(opts) :: {:ok, data} | {:error, term()}
+
+  @doc """
+  Pull remote data and cache it locally.
+
+  This callback is optional and only implemented by sources that fetch remote data.
+  When implemented, it should:
+  - Fetch data from a remote endpoint (e.g., via Req)
+  - Cache the data locally in `priv/llm_models/remote/`
+  - Write a manifest file with metadata (URL, checksum, timestamp)
+  - Support conditional GET using ETag/Last-Modified headers
+
+  ## Parameters
+
+  - `opts` - Source-specific options map (may include `:url`, `:cache_id`, etc.)
+
+  ## Returns
+
+  - `:noop` - Data not modified (HTTP 304)
+  - `{:ok, cache_path}` - Successfully cached to the given path
+  - `{:error, term}` - Failed to fetch or cache
+  """
+  @callback pull(opts) :: pull_result
+
+  @optional_callbacks pull: 1
 end
