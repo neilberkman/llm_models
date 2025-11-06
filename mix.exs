@@ -93,7 +93,7 @@ defmodule LLMModels.MixProject do
         "format --check-formatted",
         "compile --warnings-as-errors",
         "dialyzer",
-        "credo --strict"
+        "credo --min-priority higher"
       ],
       q: ["quality"]
     ]

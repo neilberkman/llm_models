@@ -59,21 +59,25 @@ defmodule LLMModels.Merge do
     override_map = Map.new(override_providers, fn p -> {Map.get(p, :id), p} end)
 
     Map.merge(base_map, override_map, fn _id, base_provider, override_provider ->
-      DeepMerge.deep_merge(base_provider, override_provider, fn
-        # For lists: replace (right wins)
-        _key, left_val, right_val when is_list(left_val) and is_list(right_val) ->
-          right_val
-
-        # For maps: continue deep merge
-        _key, left_val, right_val when is_map(left_val) and is_map(right_val) ->
-          DeepMerge.continue_deep_merge()
-
-        # For scalars: right wins
-        _key, _left_val, right_val ->
-          right_val
-      end)
+      DeepMerge.deep_merge(base_provider, override_provider, &provider_merge_resolver/2)
     end)
     |> Map.values()
+  end
+
+  defp provider_merge_resolver(left_val, right_val)
+       when is_list(left_val) and is_list(right_val) do
+    # For lists: replace (right wins)
+    right_val
+  end
+
+  defp provider_merge_resolver(left_val, right_val) when is_map(left_val) and is_map(right_val) do
+    # For maps: continue deep merge
+    DeepMerge.continue_deep_merge()
+  end
+
+  defp provider_merge_resolver(_left_val, right_val) do
+    # For scalars: right wins
+    right_val
   end
 
   @doc """

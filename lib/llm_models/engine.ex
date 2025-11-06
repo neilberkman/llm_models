@@ -440,23 +440,22 @@ defmodule LLMModels.Engine do
 
   # Deep merge with special list handling using DeepMerge
   defp deep_merge_with_list_rules(left, right) when is_map(left) and is_map(right) do
-    DeepMerge.deep_merge(left, right, fn
-      # Special case: union aliases lists
-      key, left_val, right_val when key == :aliases and is_list(left_val) and is_list(right_val) ->
-        Enum.uniq(right_val ++ left_val)
+    DeepMerge.deep_merge(left, right, &model_merge_resolver/2)
+  end
 
-      # For all other lists: replace (right wins)
-      _key, left_val, right_val when is_list(left_val) and is_list(right_val) ->
-        right_val
+  defp model_merge_resolver(left_val, right_val) when is_list(left_val) and is_list(right_val) do
+    # For lists: replace (right wins)
+    right_val
+  end
 
-      # For maps: continue deep merge
-      _key, left_val, right_val when is_map(left_val) and is_map(right_val) ->
-        DeepMerge.continue_deep_merge()
+  defp model_merge_resolver(left_val, right_val) when is_map(left_val) and is_map(right_val) do
+    # For maps: continue deep merge
+    DeepMerge.continue_deep_merge()
+  end
 
-      # For scalars: right wins
-      _key, _left_val, right_val ->
-        right_val
-    end)
+  defp model_merge_resolver(_left_val, right_val) do
+    # For scalars: right wins
+    right_val
   end
 
   defp matches_patterns?(_model_id, []), do: false

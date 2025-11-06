@@ -405,8 +405,6 @@ defmodule LLMModels.Sources.ModelsDev do
     end)
   end
 
-  defp do_transform(_), do: %{}
-
   # Convert string keys to atom keys for specific known fields
   defp atomize_keys(map, keys) when is_map(map) do
     Enum.reduce(keys, map, fn key, acc ->
