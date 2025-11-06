@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '0 0 * * 1'
   workflow_dispatch:
+    inputs:
+      force_update:
+        description: 'Force update even if no changes detected'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -47,7 +53,10 @@ jobs:
       - name: Check for changes
         id: changes
         run: |
-          if git diff --quiet priv/llm_models/upstream/ priv/llm_models/snapshot.json lib/llm_models/generated/valid_providers.ex; then
+          if [ "${{ inputs.force_update }}" = "true" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Force update enabled - proceeding with PR creation"
+          elif git diff --quiet priv/llm_models/upstream/ priv/llm_models/snapshot.json lib/llm_models/generated/valid_providers.ex; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
             echo "No changes detected in metadata files"
           else

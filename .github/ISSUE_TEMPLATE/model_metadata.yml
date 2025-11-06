@@ -1,10 +1,10 @@
-name: Model Metadata Issue
-description: Report incorrect or missing model metadata
+name: Model Metadata
+description: Modify model metadata
 labels: ["metadata"]
 body:
   - type: markdown
     attributes:
-      value: Report incorrect model data or request metadata updates.
+      value: Explain the model metadata that needs to change
 
   - type: dropdown
     id: provider
