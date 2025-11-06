@@ -7,7 +7,7 @@ LLM model metadata catalog with fast, capability-aware lookups. Use simple `"pro
 
 - **Primary interface**: `model_spec` — a string like `"openai:gpt-4o-mini"`
 - **Fast O(1) reads** via `:persistent_term`
-- **Minimal dependencies** (zoi + jason)
+- **Minimal dependencies** 
 
 ## Installation
 
