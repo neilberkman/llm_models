@@ -66,8 +66,7 @@ defmodule LLMDb.MixProject do
       {:git_ops, "~> 2.6", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:usage_rules, "~> 0.1", only: :dev, runtime: false},
-      {:rename_project, "~> 0.1.0"}
+      {:usage_rules, "~> 0.1", only: :dev, runtime: false}
     ]
   end
 
