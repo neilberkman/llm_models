@@ -11,6 +11,9 @@ defmodule LLMDb.Application do
 
   @impl true
   def start(_type, _args) do
+    # Ensure modality atoms exist before loading snapshot
+    _ = LLMDb.Generated.ValidModalities.list()
+
     case LLMDb.load() do
       {:ok, _snapshot} ->
         {:ok, self()}
