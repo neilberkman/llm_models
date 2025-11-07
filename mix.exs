@@ -33,6 +33,7 @@ defmodule LLMDb.MixProject do
           "README.md",
           "guides/schema-system.md",
           "guides/sources-and-engine.md",
+          "guides/runtime-filters.md",
           "guides/using-the-data.md",
           "guides/release-process.md",
           "CHANGELOG.md"

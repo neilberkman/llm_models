@@ -12,6 +12,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Initial release
-- Fast, persistent_term-backed LLM model metadata catalog
-- ETL pipeline for ingesting and normalizing model data
-- Support for multiple provider sources

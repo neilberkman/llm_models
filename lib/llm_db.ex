@@ -66,8 +66,38 @@ defmodule LLMDb do
 
   # Lifecycle functions
 
-  # Internal function called by Application.start/2
-  @doc false
+  @doc """
+  Loads or reloads the LLM model catalog.
+
+  This function loads the packaged snapshot and applies any runtime overrides
+  from configuration or the provided options. The catalog is automatically loaded
+  on application startup, but this function can be used to manually reload it
+  with different options.
+
+  ## Options
+
+  - `:filter` - Runtime filter configuration (see Runtime Filters guide)
+    - `:allow` - Allow patterns (e.g., `%{providers: [:openai, :anthropic]}`)
+    - `:deny` - Deny patterns (e.g., `%{capabilities: [:vision]}`)
+  - Any other options are passed through to the storage layer
+
+  ## Returns
+
+  - `{:ok, snapshot}` - Successfully loaded the catalog
+  - `{:error, :no_snapshot}` - No packaged snapshot available
+  - `{:error, term}` - Other loading errors
+
+  ## Examples
+
+      # Load with default configuration
+      {:ok, _snapshot} = LLMDb.load()
+
+      # Load with custom filters
+      LLMDb.load(filter: %{
+        allow: %{providers: [:openai, :anthropic]},
+        deny: %{capabilities: [:vision]}
+      })
+  """
   @spec load(keyword()) :: {:ok, map()} | {:error, term()}
   def load(opts \\ []) do
     with {:ok, snapshot} <- load_packaged_snapshot(),
