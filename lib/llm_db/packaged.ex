@@ -41,6 +41,7 @@ defmodule LLMDB.Packaged do
   @external_resource @compile_path
 
   # Compile-time integrity hash (computed only if file exists at compile time)
+  # Note: Used conditionally in verify_integrity/1 macro - compiler may not detect usage
   @snapshot_sha (if File.exists?(@compile_path) do
                    @compile_path
                    |> File.read!()
@@ -49,6 +50,7 @@ defmodule LLMDB.Packaged do
                  else
                    nil
                  end)
+  _ = @snapshot_sha
 
   @doc """
   Returns the absolute path to the packaged snapshot file.

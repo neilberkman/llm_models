@@ -1,6 +1,6 @@
 id = "gemini-embedding-001"
 name = "Gemini Embedding 001"
-provider_model_id = "gemini-embedding-001"
+provider_model_id = "models/gemini-embedding-001"
 release_date = "2024-03-07"
 last_updated = "2024-03-07"
 

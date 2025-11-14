@@ -58,7 +58,7 @@ defmodule LLMDB.MixProject do
 
   defp deps do
     [
-      {:zoi, "~> 0.8"},
+      {:zoi, "~> 0.10"},
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
       {:req, "~> 0.5"},

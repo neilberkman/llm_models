@@ -9,7 +9,7 @@ defmodule LLMDB.Loader do
   LLMDB module focused on the query API.
   """
 
-  alias LLMDB.{Engine, Merge, Model, Packaged, Provider, Runtime}
+  alias LLMDB.{Engine, Merge, Model, Provider, Runtime}
 
   require Logger
 
@@ -128,8 +128,13 @@ defmodule LLMDB.Loader do
 
   # Private helpers
 
+  @spec packaged_snapshot_dynamic() :: dynamic()
+  defp packaged_snapshot_dynamic do
+    apply(LLMDB.Packaged, :snapshot, [])
+  end
+
   defp load_packaged do
-    case Packaged.snapshot() do
+    case packaged_snapshot_dynamic() do
       nil ->
         {:error, :no_snapshot}
 
