@@ -353,19 +353,16 @@ defmodule LLMDB.SpecTest do
       assert {:error, :empty_segment} = Spec.parse_spec("@openai")
     end
 
-    test "resolves @ in provider segment by prioritizing first separator" do
-      # Changed: Now resolves based on which separator comes first
-      # open@ai:gpt-4 -> @ comes first -> parse as model@provider
-      assert {:ok, {:openai, "open"}} = Spec.parse_spec("open@ai:gpt-4")
+    test "rejects @ in provider segment when ambiguous" do
+      # open@ai:gpt-4 -> both formats have invalid provider segments
+      # @ format: provider="ai:gpt-4" (has :) -> :invalid_chars
+      # Colon format: provider="open@ai" (has @) -> :invalid_chars
+      assert {:error, :invalid_chars} = Spec.parse_spec("open@ai:gpt-4")
     end
 
-    test "resolves colon in provider segment by prioritizing first separator" do
-      # Changed: Now resolves based on which separator comes first
-      # gpt-4@open:ai -> : comes after @ in provider -> parse as model@provider
-      # But wait, this is actually a weird case where the provider has a colon
-      # Let me think... gpt-4 @ open:ai -> @ comes first, so model=gpt-4, provider=open:ai
-      # But open:ai won't be a valid provider, so this should error as :unknown_provider
-      assert {:error, :unknown_provider} = Spec.parse_spec("gpt-4@open:ai")
+    test "rejects colon in provider segment when ambiguous" do
+      # gpt-4@open:ai -> provider="open:ai" contains :
+      assert {:error, :invalid_chars} = Spec.parse_spec("gpt-4@open:ai")
     end
 
     test "allows colons in model ID for colon format" do
@@ -384,16 +381,14 @@ defmodule LLMDB.SpecTest do
                Spec.parse_spec("model:with:colons@openai")
     end
 
-    test "with explicit format: resolves @ in provider for colon format" do
-      # Changed: Provider segment is before first :, so open@ai is the provider
-      # This will fail as unknown provider
-      assert {:error, :unknown_provider} = Spec.parse_spec("open@ai:model", format: :colon)
+    test "with explicit format: rejects @ in provider for colon format" do
+      # Provider segment "open@ai" contains @ which is invalid
+      assert {:error, :invalid_chars} = Spec.parse_spec("open@ai:model", format: :colon)
     end
 
-    test "with explicit format: resolves : in provider for @ format" do
-      # Changed: Provider segment is after last @, so open:ai is the provider
-      # This will fail as unknown provider
-      assert {:error, :unknown_provider} = Spec.parse_spec("model@open:ai", format: :at)
+    test "with explicit format: rejects : in provider for @ format" do
+      # Provider segment "open:ai" contains : which is invalid
+      assert {:error, :invalid_chars} = Spec.parse_spec("model@open:ai", format: :at)
     end
   end
 
@@ -781,6 +776,20 @@ defmodule LLMDB.SpecTest do
       # Real-world case: google_vertex:claude-haiku-4-5@20251001
       assert {:ok, {:google_vertex, "claude-haiku-4-5@20251001"}} =
                Spec.parse_spec("google_vertex:claude-haiku-4-5@20251001")
+    end
+
+    test "resolves Google Vertex models with @ version suffix" do
+      # Google Vertex AI uses @ for versioning (e.g., model-name@version)
+      # This is the exact pattern that motivated removing strict character validation
+      assert {:ok, {:google_vertex, "claude-haiku-4-5@20251001"}} =
+               Spec.parse_spec("google_vertex:claude-haiku-4-5@20251001")
+
+      # Should also work with resolve/1
+      assert {:ok, {:google_vertex, "claude-haiku-4-5@20251001", model}} =
+               Spec.resolve("google_vertex:claude-haiku-4-5@20251001")
+
+      assert model.id == "claude-haiku-4-5@20251001"
+      assert model.name == "Claude Haiku 4.5"
     end
   end
 

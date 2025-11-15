@@ -138,14 +138,23 @@ defmodule LLMDB.Spec do
 
     case {has_colon, has_at, Keyword.get(opts, :format)} do
       {true, true, nil} ->
-        # When both separators present, prioritize based on which comes first
-        colon_pos = :binary.match(spec, ":") |> elem(0)
-        at_pos = :binary.match(spec, "@") |> elem(0)
+        # When both separators present, try to determine format based on provider validity
+        # Try @ format first (model@provider), check if potential provider is valid
+        case String.split(spec, "@", parts: 2) do
+          [_model_part, provider_part] ->
+            # Check if the part after @ could be a valid provider
+            case parse_provider(provider_part) do
+              {:ok, _} ->
+                # @ format works, use it
+                parse_at_format(spec)
 
-        if colon_pos < at_pos do
-          parse_colon_format(spec)
-        else
-          parse_at_format(spec)
+              {:error, _} ->
+                # @ format doesn't work, try colon format
+                parse_colon_format(spec)
+            end
+
+          _ ->
+            parse_colon_format(spec)
         end
 
       {true, true, :colon} ->
